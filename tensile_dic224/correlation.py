@@ -83,9 +83,11 @@ def _affine_intensity_residual(f_ref_n: np.ndarray, g: np.ndarray, dg_dx: np.nda
     r = (gc - dot * f_ref_n) / g_norm
 
     # dr/dg = (I - f f^T - r r^T)/||gc|| evaluated on centred space; account
-    # for centring via projection Q = I - 11^T/n.
-    Q = lambda v: v - v.mean()                       # noqa: E731
-    outer_I = np.eye(n) - np.outer(f_ref_n, f_ref_n) - np.outer(r, r)
+    # for centring via projection Q = I - 11^T/n.  The dense n-by-n matrix is
+    # never formed: its action on a vector is rank-3 and applied directly.
+    def project(v: np.ndarray) -> np.ndarray:
+        q = v - v.mean()
+        return q - f_ref_n * float(np.dot(f_ref_n, q)) - r * float(np.dot(r, q))
 
     dx, dy = affine_map(p, lx, ly)
     # partial deformed coords wrt parameters
@@ -100,7 +102,7 @@ def _affine_intensity_residual(f_ref_n: np.ndarray, g: np.ndarray, dg_dx: np.nda
     J = np.empty((n, 6))
     for k in range(6):
         dg = dg_dx * d_xy[k, 0] + dg_dy * d_xy[k, 1]
-        J[:, k] = outer_I @ Q(dg) / g_norm
+        J[:, k] = project(dg) / g_norm
     return r, J, dx, dy
 
 
