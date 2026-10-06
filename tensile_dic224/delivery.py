@@ -93,3 +93,88 @@ def build_zip(m: Measurement, scale: float, params: dict) -> bytes:
         zf.writestr(MASK_NAME, mask_png(m))
         zf.writestr(JSON_NAME, result_json(m, params))
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------- tensile --
+
+TENSILE_CURVE_CSV = "curve.csv"
+TENSILE_FRAMES_CSV = "frames.csv"
+TENSILE_JSON = "tensile_result.json"
+
+
+def curve_csv(results) -> str:
+    """Full stress/strain curve; one row per frame in sequence order."""
+    lines = ["frame_id,time_s,force_N,stress_MPa,eng_strain,"
+             "gauge_valid,gauge_reason\n"]
+    for fr in results:
+        lines.append(",".join([
+            fr.row.frame_id,
+            _fmt(fr.row.time_s),
+            _fmt(fr.row.force_N),
+            _fmt(fr.stress_MPa),
+            _fmt(fr.strain) if fr.gauge_valid else "",
+            str(int(fr.gauge_valid)),
+            fr.gauge_reason,
+        ]) + "\n")
+    return "".join(lines)
+
+
+def frames_csv(results) -> str:
+    """Per-frame extensometer measurement summary."""
+    lines = ["frame_id,n_grid_points,n_valid_points,"
+             "p1_u_mm,p1_v_mm,p2_u_mm,p2_v_mm,"
+             "gauge_len_mm,eng_strain,stress_MPa\n"]
+    for fr in results:
+        m = fr.measurement
+        lines.append(",".join([
+            fr.row.frame_id,
+            str(m.n_points),
+            str(m.n_valid),
+            _fmt(fr.p1_u_mm), _fmt(fr.p1_v_mm),
+            _fmt(fr.p2_u_mm), _fmt(fr.p2_v_mm),
+            _fmt(fr.gauge_len_mm),
+            _fmt(fr.strain) if fr.gauge_valid else "",
+            _fmt(fr.stress_MPa),
+        ]) + "\n")
+    return "".join(lines)
+
+
+def tensile_json(results, ext, fit, yield_point, params: dict,
+                 gauge_len0_mm: float) -> str:
+    payload = {
+        "parameters": params,
+        "extensometer": {
+            "area_mm2": ext.area_mm2,
+            "p1_px": list(ext.p1),
+            "p2_px": list(ext.p2),
+            "gauge_len0_mm": gauge_len0_mm,
+            "fit_strain_interval": [ext.fit_lo, ext.fit_hi],
+            "offset_strain": 0.002,
+        },
+        "sequence": [fr.row.frame_id for fr in results],
+        "fit": fit,
+        "yield": yield_point,
+        "outputs": {
+            "curve_csv": TENSILE_CURVE_CSV,
+            "frames_csv": TENSILE_FRAMES_CSV,
+            "per_frame_points": [f"frames/{fr.row.frame_id}_points.csv"
+                                 for fr in results],
+            "json": TENSILE_JSON,
+        },
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def build_tensile_zip(results, ext, fit, yield_point, params: dict,
+                      gauge_len0_mm: float, scale: float) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(TENSILE_CURVE_CSV, curve_csv(results))
+        zf.writestr(TENSILE_FRAMES_CSV, frames_csv(results))
+        for fr in results:
+            zf.writestr(f"frames/{fr.row.frame_id}_points.csv",
+                        points_csv(fr.measurement, scale))
+        zf.writestr(TENSILE_JSON,
+                    tensile_json(results, ext, fit, yield_point, params,
+                                 gauge_len0_mm))
+    return buf.getvalue()

@@ -90,3 +90,62 @@ unzip -l result.zip
 .venv/bin/python -m pytest -q
 .venv/bin/python -m compileall -q tensile_dic224
 ```
+
+## 拉伸试验虚拟引伸计（/tensile/*）
+
+在原有网格与逐点相关之上，新增拉伸试验虚拟引伸计接口（旧接口不变）。每帧
+独立对同一参考图测量，**不累积位移**。
+
+生成可复现拉伸示例：
+
+```bash
+.venv/bin/python examples/generate_tensile_sample.py
+# 生成 examples/tensile/{reference.png,frames.zip,forces.csv,truth.json}
+```
+
+curl 分析（JSON）：
+
+```bash
+curl -s http://127.0.0.1:8000/tensile/analyze \
+  -F reference=@examples/tensile/reference.png \
+  -F frames=@examples/tensile/frames.zip \
+  -F forces=@examples/tensile/forces.csv \
+  -F scale_mm_per_px=0.05 -F roi_x=32 -F roi_y=32 -F roi_w=192 -F roi_h=192 \
+  -F subset_size=31 -F grid_step=16 -F search_radius=8 -F max_iterations=50 \
+  -F area_mm2=25 -F p1_x=64 -F p1_y=128 -F p2_x=192 -F p2_y=128 \
+  -F fit_strain_min=0.002 -F fit_strain_max=0.008 | python -m json.tool
+```
+
+下载 ZIP（把 /tensile/analyze 换成 /tensile/download 并加 -o result.zip）。
+
+### 输入
+
+- `reference`：8 位灰度参考 PNG（**16 位 PNG 一律拒绝**）。
+- `frames`：2–12 个变形帧 PNG 的 ZIP，文件名（去扩展名）即 frame_id。
+- `forces`：CSV，列 `frame_id,time_s,force_N`；frame_id 唯一且与 ZIP 内图片
+  一一对应，time_s 有限且严格递增（行序即序列），force_N 为非负有限牛顿值。
+- `area_mm2`：正有限原始截面积 mm²。
+- `p1_x,p1_y,p2_x,p2_y`：参考图像素坐标的两个不同引伸计端点，必须落在网格
+  覆盖范围内。
+- `fit_strain_min,fit_strain_max`：非负且递增的拟合应变闭区间。
+- 其余 DIC 参数同旧接口。任何非法输入整请求 422，不产生部分结果。
+
+### 测量与计算
+
+- 端点位移：仅当端点所在网格单元**四角位移全部有效**时做双线性插值，
+  否则该帧标距无效（gauge_valid=0），不补缺测。
+- 工程应变：变形后两端点欧氏距离 / 原始标距 − 1（统一毫米坐标与位移）。
+- 工程应力：force_N / area_mm2，单位 MPa（N/mm²）。
+- 拟合：闭区间内全部有效点最小二乘 σ = Eε + b，需至少 3 个不同应变且
+  E > 0，返回 E、b、R²；失败时给出 reason，曲线仍完整保留。
+- 屈服：拟合上界之后按 0.2% 偏移线 σ = E(ε − 0.002) + b，仅在**相邻有效
+  且应变递增**的帧间寻找实测减直线由正到非正的首次交点并线性插值；不跨
+  缺测、不外推，无交点返回 null 及原因。
+
+### ZIP 内容（跨文件以 frame_id 联动）
+
+- `curve.csv`：全部帧 frame_id,time_s,force_N,stress_MPa,eng_strain,
+  gauge_valid,gauge_reason，缺测应变留空。
+- `frames.csv`：逐帧端点位移、标距、应变、应力与有效点数。
+- `frames/<frame_id>_points.csv`：逐帧 DIC 逐点结果（同旧接口 points.csv）。
+- `tensile_result.json`：参数回显、帧序列、拟合与屈服结果、文件清单。

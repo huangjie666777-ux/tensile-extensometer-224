@@ -82,11 +82,6 @@ def _affine_intensity_residual(f_ref_n: np.ndarray, g: np.ndarray, dg_dx: np.nda
     dot = float(np.dot(f_ref_n, gc))
     r = (gc - dot * f_ref_n) / g_norm
 
-    # dr/dg = (I - f f^T - r r^T)/||gc|| evaluated on centred space; account
-    # for centring via projection Q = I - 11^T/n.
-    Q = lambda v: v - v.mean()                       # noqa: E731
-    outer_I = np.eye(n) - np.outer(f_ref_n, f_ref_n) - np.outer(r, r)
-
     dx, dy = affine_map(p, lx, ly)
     # partial deformed coords wrt parameters
     d_xy = np.empty((6, 2, n))
@@ -97,10 +92,15 @@ def _affine_intensity_residual(f_ref_n: np.ndarray, g: np.ndarray, dg_dx: np.nda
     d_xy[4] = [np.zeros(n), lx]                      # vx
     d_xy[5] = [np.zeros(n), ly]                      # vy
 
+    # dr/dg = (I - f f^T - r r^T) Q / ||gc|| with Q = I - 11^T/n the centring
+    # projection.  f_ref_n and r are orthonormal, so the projection is applied
+    # implicitly (O(n) per column) instead of building the dense n x n matrix.
     J = np.empty((n, 6))
     for k in range(6):
         dg = dg_dx * d_xy[k, 0] + dg_dy * d_xy[k, 1]
-        J[:, k] = outer_I @ Q(dg) / g_norm
+        q = dg - dg.mean()
+        J[:, k] = (q - f_ref_n * np.dot(f_ref_n, q)
+                   - r * np.dot(r, q)) / g_norm
     return r, J, dx, dy
 
 

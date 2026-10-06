@@ -98,7 +98,11 @@ def decode_gray_png(data: bytes, label: str) -> np.ndarray:
             fmt = (im.format or "").upper()
             if fmt != "PNG":
                 raise RequestError(f"{label} must be a PNG image (got {fmt or 'unknown'})")
-            if im.mode not in ("L", "I;16"):
+            if im.mode in ("I", "I;16", "I;16B", "I;16L"):
+                raise RequestError(
+                    f"{label} must be 8-bit grayscale; 16-bit PNG is not supported "
+                    f"(mode={im.mode})")
+            if im.mode != "L":
                 raise RequestError(f"{label} must be an 8-bit grayscale PNG (mode={im.mode})")
             arr = np.asarray(im, dtype=np.uint8)
     except RequestError:

@@ -1,0 +1,46 @@
+{
+  "seed": 97,
+  "E_true_MPa": 70000.0,
+  "hardening_MPa": 2500.0,
+  "yield_strain_true": 0.01,
+  "area_mm2": 25.0,
+  "scale_mm_per_px": 0.05,
+  "strains": [
+    0.002,
+    0.004,
+    0.006,
+    0.008,
+    0.01,
+    0.012,
+    0.014,
+    0.016,
+    0.018,
+    0.02
+  ],
+  "suggested_request": {
+    "scale_mm_per_px": 0.05,
+    "roi": [
+      32,
+      32,
+      192,
+      192
+    ],
+    "subset_size": 31,
+    "grid_step": 16,
+    "search_radius": 8,
+    "max_iterations": 50,
+    "area_mm2": 25.0,
+    "p1": [
+      64.0,
+      128.0
+    ],
+    "p2": [
+      192.0,
+      128.0
+    ],
+    "fit_strain_interval": [
+      0.002,
+      0.008
+    ]
+  }
+}

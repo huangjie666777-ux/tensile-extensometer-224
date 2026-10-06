@@ -5,8 +5,12 @@ import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from tensile_dic224.delivery import build_zip
+from tensile_dic224.delivery import build_tensile_zip, build_zip
 from tensile_dic224.pipeline import run_measurement
+from tensile_dic224.tensile import (build_extensometer_params, fit_modulus,
+                                    match_frames, offset_yield,
+                                    parse_force_csv, parse_frames_zip,
+                                    run_tensile)
 from tensile_dic224.validation import (MAX_EDGE, MAX_GRID_POINTS,
                                           MAX_ITERATIONS, MAX_SEARCH_RADIUS,
                                           RequestError, build_params,
@@ -125,3 +129,127 @@ async def download(
         headers={"Content-Disposition":
                  'attachment; filename="tensile224_result.zip"'},
 )
+
+
+TENSILE_FORM_KEYS = (
+    "scale_mm_per_px", "roi_x", "roi_y", "roi_w", "roi_h",
+    "subset_size", "grid_step", "search_radius", "max_iterations",
+    "area_mm2", "p1_x", "p1_y", "p2_x", "p2_y",
+    "fit_strain_min", "fit_strain_max",
+)
+
+
+async def _prepare_tensile(reference: UploadFile, frames: UploadFile,
+                           forces: UploadFile, form: dict):
+    try:
+        params = build_params(form)
+        ext = build_extensometer_params(form)
+        ref = decode_gray_png(await reference.read(), "reference")
+        rows = parse_force_csv(await forces.read())
+        frame_png = parse_frames_zip(await frames.read())
+        match_frames(rows, frame_png)
+        gx, gy = grid_points(params)
+        results = run_tensile(ref, rows, frame_png, gx, gy, params, ext)
+    except RequestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    fit = fit_modulus(results, ext.fit_lo, ext.fit_hi)
+    yld = offset_yield(results, fit)
+    form_dump = {k: form.get(k) for k in TENSILE_FORM_KEYS}
+    gauge_len0 = float(np.linalg.norm(
+        (np.array(ext.p2) - np.array(ext.p1)) * params.scale_mm_per_px))
+    return results, ext, fit, yld, form_dump, gauge_len0, params
+
+
+@app.post("/tensile/analyze", summary="Tensile virtual extensometer (JSON)")
+async def tensile_analyze(
+    reference: UploadFile = File(..., description="reference 8-bit gray PNG"),
+    frames: UploadFile = File(..., description="ZIP of 2-12 frame PNGs"),
+    forces: UploadFile = File(..., description="CSV: frame_id,time_s,force_N"),
+    scale_mm_per_px: str = Form(...),
+    roi_x: str = Form(...),
+    roi_y: str = Form(...),
+    roi_w: str = Form(...),
+    roi_h: str = Form(...),
+    subset_size: str = Form(...),
+    grid_step: str = Form(...),
+    search_radius: str = Form(...),
+    max_iterations: str = Form(...),
+    area_mm2: str = Form(...),
+    p1_x: str = Form(...),
+    p1_y: str = Form(...),
+    p2_x: str = Form(...),
+    p2_y: str = Form(...),
+    fit_strain_min: str = Form(...),
+    fit_strain_max: str = Form(...),
+):
+    form = {k: v for k, v in locals().items()
+            if k in TENSILE_FORM_KEYS}
+    results, ext, fit, yld, form_dump, gauge_len0, _ = \
+        await _prepare_tensile(reference, frames, forces, form)
+
+    def cell(a):
+        return None if not np.isfinite(a) else float(a)
+
+    frames_out = []
+    for fr in results:
+        frames_out.append({
+            "frame_id": fr.row.frame_id,
+            "time_s": fr.row.time_s,
+            "force_N": fr.row.force_N,
+            "stress_MPa": cell(fr.stress_MPa),
+            "eng_strain": cell(fr.strain) if fr.gauge_valid else None,
+            "gauge_valid": fr.gauge_valid,
+            "gauge_reason": fr.gauge_reason,
+            "gauge_len_mm": cell(fr.gauge_len_mm),
+            "n_valid_points": fr.measurement.n_valid,
+        })
+    return {
+        "parameters": form_dump,
+        "extensometer": {
+            "area_mm2": ext.area_mm2,
+            "p1_px": list(ext.p1),
+            "p2_px": list(ext.p2),
+            "gauge_len0_mm": gauge_len0,
+            "fit_strain_interval": [ext.fit_lo, ext.fit_hi],
+            "offset_strain": 0.002,
+        },
+        "frames": frames_out,
+        "fit": fit,
+        "yield": yld,
+    }
+
+
+@app.post("/tensile/download", summary="Tensile virtual extensometer (ZIP)")
+async def tensile_download(
+    reference: UploadFile = File(...),
+    frames: UploadFile = File(...),
+    forces: UploadFile = File(...),
+    scale_mm_per_px: str = Form(...),
+    roi_x: str = Form(...),
+    roi_y: str = Form(...),
+    roi_w: str = Form(...),
+    roi_h: str = Form(...),
+    subset_size: str = Form(...),
+    grid_step: str = Form(...),
+    search_radius: str = Form(...),
+    max_iterations: str = Form(...),
+    area_mm2: str = Form(...),
+    p1_x: str = Form(...),
+    p1_y: str = Form(...),
+    p2_x: str = Form(...),
+    p2_y: str = Form(...),
+    fit_strain_min: str = Form(...),
+    fit_strain_max: str = Form(...),
+):
+    form = {k: v for k, v in locals().items()
+            if k in TENSILE_FORM_KEYS}
+    results, ext, fit, yld, form_dump, gauge_len0, params = \
+        await _prepare_tensile(reference, frames, forces, form)
+    archive = build_tensile_zip(results, ext, fit, yld, form_dump,
+                                gauge_len0, params.scale_mm_per_px)
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={"Content-Disposition":
+                 'attachment; filename="tensile224_extensometer.zip"'},
+    )
